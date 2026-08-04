@@ -12,43 +12,85 @@ st.set_page_config(
 st.title("📊 Review Insight Copilot")
 
 # ============================================================
-# 사이드바 : 시각화 설정 (앱 사용자가 실시간으로 변경 가능)
+# 섹션별 시각화 설정 (session_state에 섹션마다 따로 저장)
 # ============================================================
-st.sidebar.header("⚙️ 시각화 설정")
+SECTIONS = [
+    "감성 분포",
+    "카테고리별 리뷰 수",
+    "카테고리별 평점",
+    "TOP 키워드",
+    "VOC 분석",
+    "상품별 리뷰 TOP",
+    "상품 위험도",
+]
 
-chart_type = st.sidebar.radio(
-    "감성 차트 종류",
-    ["파이", "도넛", "막대"],
-    horizontal=True
-)
-
-st.sidebar.markdown("**감성 색상**")
-pos_color = st.sidebar.color_picker("긍정", "#1f77b4")
-neu_color = st.sidebar.color_picker("중립", "#aec7e8")
-neg_color = st.sidebar.color_picker("부정", "#d62728")
-sentiment_color_map = {
-    "긍정": pos_color,
-    "중립": neu_color,
-    "부정": neg_color
+DEFAULTS = {
+    "감성 분포": {"chart": "파이", "pos": "#1f77b4", "neu": "#aec7e8", "neg": "#d62728"},
+    "카테고리별 리뷰 수": {"chart": "막대", "color": "#1f77b4"},
+    "카테고리별 평점": {"chart": "막대", "color": "#2ca02c"},
+    "TOP 키워드": {"chart": "가로 막대", "n": 20, "color": "#ff7f0e"},
+    "VOC 분석": {"chart": "막대"},
+    "상품별 리뷰 TOP": {"chart": "가로 막대", "n": 20, "color": "#9467bd"},
+    "상품 위험도": {"chart": "가로 막대", "n": 20, "color": "#d62728"},
 }
 
-voc_chart_type = st.sidebar.radio(
-    "VOC 차트 종류",
-    ["막대", "파이"],
-    horizontal=True
-)
+if "cfg" not in st.session_state:
+    st.session_state.cfg = {k: dict(v) for k, v in DEFAULTS.items()}
 
-top_keyword_n = st.sidebar.slider(
-    "TOP 키워드 개수", 5, 30, 20
-)
-top_product_n = st.sidebar.slider(
-    "상품 / 위험도 TOP N", 5, 30, 20
-)
+cfg = st.session_state.cfg
 
-uploaded_file = st.file_uploader(
-    "엑셀 파일 업로드",
-    type=["xlsx"]
-)
+# ---------------- 사이드바 : 섹션 선택 → 해당 설정만 표시 ----------------
+st.sidebar.header("⚙️ 시각화 설정")
+section = st.sidebar.selectbox("섹션 선택", SECTIONS)
+st.sidebar.markdown(f"**[{section}] 설정**")
+
+c = cfg[section]
+
+
+def radio_with_default(label, options, current):
+    return st.sidebar.radio(
+        label, options,
+        index=options.index(current) if current in options else 0,
+        horizontal=True
+    )
+
+
+if section == "감성 분포":
+    c["chart"] = radio_with_default("차트 종류", ["파이", "도넛", "막대"], c["chart"])
+    c["pos"] = st.sidebar.color_picker("긍정 색", c["pos"])
+    c["neu"] = st.sidebar.color_picker("중립 색", c["neu"])
+    c["neg"] = st.sidebar.color_picker("부정 색", c["neg"])
+
+elif section == "카테고리별 리뷰 수":
+    c["chart"] = radio_with_default("차트 종류", ["막대", "파이"], c["chart"])
+    c["color"] = st.sidebar.color_picker("막대 색", c["color"])
+
+elif section == "카테고리별 평점":
+    c["chart"] = radio_with_default("차트 종류", ["막대", "파이"], c["chart"])
+    c["color"] = st.sidebar.color_picker("막대 색", c["color"])
+
+elif section == "TOP 키워드":
+    c["chart"] = radio_with_default("차트 종류", ["가로 막대", "세로 막대"], c["chart"])
+    c["n"] = st.sidebar.slider("표시 개수", 5, 30, c["n"])
+    c["color"] = st.sidebar.color_picker("막대 색", c["color"])
+
+elif section == "VOC 분석":
+    c["chart"] = radio_with_default("차트 종류", ["막대", "파이"], c["chart"])
+
+elif section == "상품별 리뷰 TOP":
+    c["chart"] = radio_with_default("차트 종류", ["가로 막대", "세로 막대"], c["chart"])
+    c["n"] = st.sidebar.slider("표시 개수", 5, 30, c["n"])
+    c["color"] = st.sidebar.color_picker("막대 색", c["color"])
+
+elif section == "상품 위험도":
+    c["chart"] = radio_with_default("차트 종류", ["가로 막대", "세로 막대"], c["chart"])
+    c["n"] = st.sidebar.slider("표시 개수", 5, 30, c["n"])
+    c["color"] = st.sidebar.color_picker("막대 색", c["color"])
+
+st.sidebar.caption("섹션을 바꿔도 각 설정은 유지됩니다.")
+
+# ------------------------------------------------------------
+uploaded_file = st.file_uploader("엑셀 파일 업로드", type=["xlsx"])
 
 
 def sentiment(text):
@@ -60,7 +102,6 @@ def sentiment(text):
         "빠르", "재구매", "가성비",
         "믿고", "잘사용"
     ]
-
     negative_words = [
         "아쉽", "실망", "불편",
         "늦", "문제", "파손",
@@ -118,61 +159,45 @@ def voc_mapping(text):
     return "기타"
 
 
-def make_sentiment_chart(sentiment_df, chart_type, color_map):
-    if chart_type == "막대":
-        fig = px.bar(
-            sentiment_df,
-            x="감성", y="건수",
-            color="감성",
-            color_discrete_map=color_map
+def item_bar(df, cat_col, val_col, chart, color):
+    """항목별 막대 차트. '가로 막대'면 orientation=h."""
+    if chart == "가로 막대":
+        d = df.sort_values(val_col)
+        return px.bar(
+            d, x=val_col, y=cat_col, orientation="h",
+            color_discrete_sequence=[color]
         )
-    else:
-        hole = 0.4 if chart_type == "도넛" else 0
-        fig = px.pie(
-            sentiment_df,
-            names="감성", values="건수",
-            color="감성",
-            color_discrete_map=color_map,
-            hole=hole
-        )
-    return fig
+    return px.bar(
+        df, x=cat_col, y=val_col,
+        color_discrete_sequence=[color]
+    )
 
 
 if uploaded_file:
 
     df = pd.read_excel(uploaded_file, engine="openpyxl")
 
-    review_col = "상품평"
-
-    if review_col not in df.columns:
+    if "상품평" not in df.columns:
         st.error("상품평 컬럼을 찾지 못했습니다.")
         st.stop()
 
     result = df.copy()
 
-    result["감성"] = (
-        result["상품평"].fillna("").astype(str).apply(sentiment)
-    )
+    result["감성"] = result["상품평"].fillna("").astype(str).apply(sentiment)
 
     if "상품명" in result.columns:
-        result["카테고리"] = (
-            result["상품명"].fillna("").astype(str).apply(category_mapping)
-        )
+        result["카테고리"] = result["상품명"].fillna("").astype(str).apply(category_mapping)
     else:
         result["카테고리"] = "기타"
 
-    result["VOC"] = (
-        result["상품평"].fillna("").astype(str).apply(voc_mapping)
-    )
+    result["VOC"] = result["상품평"].fillna("").astype(str).apply(voc_mapping)
 
     col1, col2 = st.columns(2)
-
     with col1:
         selected_category = st.selectbox(
             "카테고리",
             ["전체"] + sorted(result["카테고리"].unique().tolist())
         )
-
     with col2:
         selected_voc = st.selectbox(
             "VOC",
@@ -180,10 +205,8 @@ if uploaded_file:
         )
 
     filtered_df = result.copy()
-
     if selected_category != "전체":
         filtered_df = filtered_df[filtered_df["카테고리"] == selected_category]
-
     if selected_voc != "전체":
         filtered_df = filtered_df[filtered_df["VOC"] == selected_voc]
 
@@ -191,103 +214,114 @@ if uploaded_file:
     positive = len(filtered_df[filtered_df["감성"] == "긍정"])
     negative = len(filtered_df[filtered_df["감성"] == "부정"])
     neutral = len(filtered_df[filtered_df["감성"] == "중립"])
-
     positive_rate = round(positive / total * 100, 1) if total else 0
 
-    a, b, c, d = st.columns(4)
-    a.metric("전체 리뷰", total)
-    b.metric("긍정", positive)
-    c.metric("부정", negative)
-    d.metric("긍정률", f"{positive_rate}%")
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("전체 리뷰", total)
+    m2.metric("긍정", positive)
+    m3.metric("부정", negative)
+    m4.metric("긍정률", f"{positive_rate}%")
 
     # ---------------- 감성 분포 ----------------
     st.subheader("📈 감성 분포")
-
+    sc = cfg["감성 분포"]
     sentiment_df = pd.DataFrame({
         "감성": ["긍정", "중립", "부정"],
         "건수": [positive, neutral, negative]
     })
+    color_map = {"긍정": sc["pos"], "중립": sc["neu"], "부정": sc["neg"]}
 
-    fig = make_sentiment_chart(sentiment_df, chart_type, sentiment_color_map)
+    if sc["chart"] == "막대":
+        fig = px.bar(sentiment_df, x="감성", y="건수",
+                     color="감성", color_discrete_map=color_map)
+    else:
+        hole = 0.4 if sc["chart"] == "도넛" else 0
+        fig = px.pie(sentiment_df, names="감성", values="건수",
+                     color="감성", color_discrete_map=color_map, hole=hole)
     st.plotly_chart(fig, use_container_width=True)
 
     # ---------------- 카테고리별 리뷰 수 ----------------
     st.subheader("📂 카테고리별 리뷰 수")
-
+    cc = cfg["카테고리별 리뷰 수"]
     category_count = (
-        result.groupby("카테고리")
-        .size()
+        result.groupby("카테고리").size()
         .reset_index(name="리뷰수")
         .sort_values("리뷰수", ascending=False)
     )
-
-    st.dataframe(category_count, use_container_width=True)
+    if cc["chart"] == "파이":
+        fig = px.pie(category_count, names="카테고리", values="리뷰수")
+    else:
+        fig = px.bar(category_count, x="카테고리", y="리뷰수",
+                     color_discrete_sequence=[cc["color"]])
+    st.plotly_chart(fig, use_container_width=True)
+    with st.expander("표 보기"):
+        st.dataframe(category_count, use_container_width=True)
 
     # ---------------- 카테고리별 평점 ----------------
     if "평점" in result.columns:
         st.subheader("⭐ 카테고리별 평점")
-
-        rating_df = (
-            result.groupby("카테고리")["평점"].mean().reset_index()
-        )
-
-        st.dataframe(rating_df, use_container_width=True)
+        rc = cfg["카테고리별 평점"]
+        rating_df = result.groupby("카테고리")["평점"].mean().reset_index()
+        if rc["chart"] == "파이":
+            fig = px.pie(rating_df, names="카테고리", values="평점")
+        else:
+            fig = px.bar(rating_df, x="카테고리", y="평점",
+                         color_discrete_sequence=[rc["color"]])
+        st.plotly_chart(fig, use_container_width=True)
+        with st.expander("표 보기"):
+            st.dataframe(rating_df, use_container_width=True)
 
     # ---------------- TOP 키워드 ----------------
     st.subheader("🔥 TOP 키워드")
-
+    kc = cfg["TOP 키워드"]
     text = " ".join(filtered_df["상품평"].fillna("").astype(str))
     words = re.findall(r"[가-힣]{2,}", text)
-
-    stop_words = {
-        "좋아요", "있어요", "합니다",
-        "너무", "정말", "제품", "사용"
-    }
-
+    stop_words = {"좋아요", "있어요", "합니다", "너무", "정말", "제품", "사용"}
     words = [w for w in words if w not in stop_words]
-
     keyword_df = pd.DataFrame(
-        Counter(words).most_common(top_keyword_n),
+        Counter(words).most_common(kc["n"]),
         columns=["키워드", "빈도"]
     )
-
-    st.dataframe(keyword_df, use_container_width=True)
+    if not keyword_df.empty:
+        fig = item_bar(keyword_df, "키워드", "빈도", kc["chart"], kc["color"])
+        st.plotly_chart(fig, use_container_width=True)
+    with st.expander("표 보기"):
+        st.dataframe(keyword_df, use_container_width=True)
 
     # ---------------- VOC 분석 ----------------
     st.subheader("🚨 VOC 분석")
-
+    vc = cfg["VOC 분석"]
     voc_df = (
-        filtered_df.groupby("VOC")
-        .size()
+        filtered_df.groupby("VOC").size()
         .reset_index(name="건수")
         .sort_values("건수", ascending=False)
     )
-
-    st.dataframe(voc_df, use_container_width=True)
-
-    if voc_chart_type == "파이":
+    if vc["chart"] == "파이":
         voc_chart = px.pie(voc_df, names="VOC", values="건수")
     else:
         voc_chart = px.bar(voc_df, x="VOC", y="건수", color="VOC")
-
     st.plotly_chart(voc_chart, use_container_width=True)
+    with st.expander("표 보기"):
+        st.dataframe(voc_df, use_container_width=True)
 
     # ---------------- 상품별 리뷰 TOP ----------------
-    st.subheader(f"📦 상품별 리뷰 TOP{top_product_n}")
-
+    pc = cfg["상품별 리뷰 TOP"]
+    st.subheader(f"📦 상품별 리뷰 TOP{pc['n']}")
     product_df = (
-        filtered_df.groupby("상품명")
-        .size()
+        filtered_df.groupby("상품명").size()
         .reset_index(name="리뷰수")
         .sort_values("리뷰수", ascending=False)
-        .head(top_product_n)
+        .head(pc["n"])
     )
-
-    st.dataframe(product_df, use_container_width=True)
+    if not product_df.empty:
+        fig = item_bar(product_df, "상품명", "리뷰수", pc["chart"], pc["color"])
+        st.plotly_chart(fig, use_container_width=True)
+    with st.expander("표 보기"):
+        st.dataframe(product_df, use_container_width=True)
 
     # ---------------- 상품 위험도 ----------------
+    rk = cfg["상품 위험도"]
     st.subheader("⚠️ 상품 위험도")
-
     risk_df = (
         result.groupby("상품명")
         .agg(
@@ -296,42 +330,30 @@ if uploaded_file:
         )
         .reset_index()
     )
-
-    risk_df["위험도(%)"] = (
-        risk_df["부정리뷰"] / risk_df["전체리뷰"] * 100
-    ).round(1)
-
+    risk_df["위험도(%)"] = (risk_df["부정리뷰"] / risk_df["전체리뷰"] * 100).round(1)
     risk_df = risk_df.sort_values("위험도(%)", ascending=False)
-
-    st.dataframe(risk_df.head(top_product_n), use_container_width=True)
+    risk_top = risk_df.head(rk["n"])
+    if not risk_top.empty:
+        fig = item_bar(risk_top, "상품명", "위험도(%)", rk["chart"], rk["color"])
+        st.plotly_chart(fig, use_container_width=True)
+    with st.expander("표 보기"):
+        st.dataframe(risk_top, use_container_width=True)
 
     # ---------------- 재구매 의향 ----------------
     st.subheader("🔄 재구매 의향")
-
-    repurchase_keywords = [
-        "재구매", "또 구매", "또 주문",
-        "계속 사용", "계속 구매"
-    ]
-
-    repurchase_count = (
-        filtered_df["상품평"].astype(str).apply(
-            lambda x: any(k in x for k in repurchase_keywords)
-        ).sum()
-    )
-
+    repurchase_keywords = ["재구매", "또 구매", "또 주문", "계속 사용", "계속 구매"]
+    repurchase_count = filtered_df["상품평"].astype(str).apply(
+        lambda x: any(k in x for k in repurchase_keywords)
+    ).sum()
     repurchase_rate = round(
         repurchase_count / len(filtered_df) * 100, 1
     ) if len(filtered_df) else 0
-
     st.metric("재구매 의향 비율", f"{repurchase_rate}%")
 
     # ---------------- 리뷰 상세 ----------------
     st.subheader("📝 리뷰 상세")
-
     show_negative = st.checkbox("부정 리뷰만 보기")
-
     view_df = filtered_df[["감성", "카테고리", "VOC", "상품명", "상품평"]]
-
     if show_negative:
         view_df = view_df[view_df["감성"] == "부정"]
 
@@ -354,16 +376,12 @@ if uploaded_file:
         .map(color_sentiment, subset=["감성"])
         .apply(highlight_row, axis=1)
     )
-
     st.dataframe(styled, use_container_width=True, height=600)
 
     # ---------------- 경영진 인사이트 ----------------
     st.subheader("💡 경영진 인사이트")
-
     if len(voc_df) > 0:
-        top_voc = voc_df.iloc[0]["VOC"]
-        st.success(f"주요 VOC : {top_voc}")
-
+        st.success(f"주요 VOC : {voc_df.iloc[0]['VOC']}")
     if positive_rate >= 80:
         st.success("고객 만족도가 매우 높습니다.")
     elif positive_rate >= 60:
@@ -373,13 +391,11 @@ if uploaded_file:
 
     # ---------------- 개선 우선순위 ----------------
     st.subheader("🎯 개선 우선순위")
-
     for rank, (idx, row) in enumerate(voc_df.head(3).iterrows(), start=1):
         st.write(f"{rank}위 {row['VOC']} ({row['건수']}건)")
 
     # ---------------- 다운로드 ----------------
     csv = filtered_df.to_csv(index=False, encoding="utf-8-sig")
-
     st.download_button(
         "📥 결과 다운로드",
         csv,
