@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.express as px
 from collections import Counter
 import re
+from streamlit_gsheets import GSheetsConnection
 
 st.set_page_config(
     page_title="Review Insight Copilot",
@@ -30,13 +31,12 @@ cfg = st.session_state.cfg
 
 
 def available_sections(cols):
-    """업로드된 엑셀 컬럼에 따라 사용 가능한 섹션만 반환."""
-    secs = ["감성 분포"]                       # 상품평만 있으면 가능
+    secs = ["감성 분포"]
     if "상품명" in cols:
         secs.append("카테고리별 리뷰 수")
         if "평점" in cols:
             secs.append("카테고리별 평점")
-    secs += ["TOP 키워드", "VOC 분석"]          # 상품평 기반
+    secs += ["TOP 키워드", "VOC 분석"]
     if "상품명" in cols:
         secs += ["상품별 리뷰 TOP", "상품 위험도"]
     return secs
@@ -114,22 +114,29 @@ def radio_with_default(label, options, current):
 
 
 # ------------------------------------------------------------
-# 1) 먼저 업로드 (컬럼을 알아야 섹션 목록을 만들 수 있음)
+# 1) Google Sheets에서 데이터 읽기 (엑셀 업로드 대체)
+#    - Secrets의 [connections.gsheets] spreadsheet 링크를 사용
+#    - ttl 로 주기적으로 새로고침 (시트 수정 시 반영)
 # ------------------------------------------------------------
 st.sidebar.header("⚙️ 시각화 설정")
 
-uploaded_file = st.file_uploader("엑셀 파일 업로드", type=["xlsx"])
-
-if not uploaded_file:
-    st.sidebar.caption("엑셀 업로드 후 섹션이 표시됩니다.")
-    st.info("엑셀 파일을 업로드하면 분석과 시각화 설정이 나타납니다.")
+try:
+    conn = st.connection("gsheets", type=GSheetsConnection)
+    df = conn.read(ttl="10m")          # 특정 탭이면: conn.read(worksheet="시트1", ttl="10m")
+    df = df.dropna(how="all")          # 빈 행 제거
+except Exception as e:
+    st.error("구글 시트를 불러오지 못했습니다. Secrets의 spreadsheet 링크와 공유 설정(뷰어)을 확인하세요.")
+    st.caption(f"상세: {e}")
     st.stop()
-
-df = pd.read_excel(uploaded_file, engine="openpyxl")
 
 if "상품평" not in df.columns:
-    st.error("상품평 컬럼을 찾지 못했습니다.")
+    st.error("시트에서 '상품평' 컬럼을 찾지 못했습니다. 첫 행 헤더를 확인하세요.")
     st.stop()
+
+col_refresh = st.sidebar.button("🔄 데이터 새로고침")
+if col_refresh:
+    st.cache_data.clear()
+    st.rerun()
 
 data_cols = list(df.columns)
 
@@ -140,7 +147,7 @@ if "상품명" in result.columns:
 result["VOC"] = result["상품평"].fillna("").astype(str).apply(voc_mapping)
 
 # ------------------------------------------------------------
-# 2) 컬럼 기반으로 섹션 목록 생성 → 사이드바 선택 메뉴 (자동 반영)
+# 2) 컬럼 기반 섹션 목록 → 사이드바 선택 메뉴
 # ------------------------------------------------------------
 secs = available_sections(data_cols)
 section = st.sidebar.selectbox("섹션 선택", secs)
