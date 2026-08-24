@@ -1,9 +1,20 @@
+# import streamlit as st
+# import pandas as pd
+# import plotly.express as px
+# from collections import Counter
+# import re
+# from streamlit_gsheets import GSheetsConnection
+
+
 import streamlit as st
 import pandas as pd
 import plotly.express as px
 from collections import Counter
 import re
-from streamlit_gsheets import GSheetsConnection
+import requests
+from io import BytesIO
+from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
+
 
 st.set_page_config(
     page_title="Review Insight Copilot",
